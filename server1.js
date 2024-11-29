@@ -45,6 +45,16 @@ const connectWithRetry = () => {
 };
 connectWithRetry();
 
+// Middleware to check database connection
+app.use((req, res, next) => {
+  if (!db) {
+    const error = new Error("Database connection not established");
+    logger(error.message, "error");
+    return next(error);
+  }
+  next();
+});
+
 // Serve Static Images
 const imagesPath = path.join(__dirname, "images");
 app.use("/images", express.static(imagesPath));
@@ -81,10 +91,35 @@ app.use(
   express.static(staticPath)
 );
 
+// Middleware for PUT and POST requests
+const validateAndLogMiddleware = (req, res, next) => {
+  if (req.method === "POST" || req.method === "PUT") {
+    // Log the request details
+    logger(
+      `Incoming ${req.method} request to ${
+        req.originalUrl
+      } with body: ${JSON.stringify(req.body)}`
+    );
+
+    // Basic validation for empty body
+    if (!req.body || Object.keys(req.body).length === 0) {
+      const errorMsg = "Request body cannot be empty for POST/PUT methods";
+      logger(errorMsg, "warn");
+      return res.status(400).send({ msg: errorMsg });
+    }
+
+    // Proceed to the next middleware or route handler
+  }
+  next();
+};
+
+// Attach the middleware for PUT and POST
+app.use(validateAndLogMiddleware);
+
 // Default message
 app.get("/", (req, res) => {
   logger("Default route accessed");
-  res.send("Select a collection, e.g., /collection/messages");
+  res.send("Select a collection, e.g., /collection/lessons");
 });
 
 // Get the collection name
@@ -122,6 +157,22 @@ app.post("/collection/:collectionName", (req, res, next) => {
     );
     res.send(result.ops);
   });
+});
+
+// Update a document in a collection
+app.put("/collection/:collectionName/:id", (req, res, next) => {
+  req.collection.updateOne(
+    { _id: new ObjectID(req.params.id) },
+    { $set: req.body },
+    (e, result) => {
+      if (e) {
+        logger(`Error updating document: ${e.message}`, "error");
+        return next(e);
+      }
+      logger(`Updated document with ID: ${req.params.id}`);
+      res.send(result);
+    }
+  );
 });
 
 // Fetch a single document by ID
@@ -197,7 +248,7 @@ app.post("/place-order", async (req, res) => {
   try {
     // Insert the order into the "orders" collection
     const orderResult = await db.collection("orders").insertOne(orderData);
-    console.log("Order successfully placed:", orderResult.insertedId);
+    logger(`Order successfully placed: ${orderResult.insertedId}`, "success");
 
     // Update the availableInventory in the "lessons" collection
     const bulkOperations = orderData.cart.map((item) => ({
@@ -210,11 +261,14 @@ app.post("/place-order", async (req, res) => {
     const inventoryUpdateResult = await db
       .collection("lessons")
       .bulkWrite(bulkOperations);
-    console.log("Inventory updated:", inventoryUpdateResult);
+    logger(
+      `Inventory updated: ${JSON.stringify(inventoryUpdateResult)}`,
+      "info"
+    );
 
     res.status(200).send({ msg: "Order placed successfully!" });
   } catch (error) {
-    console.error("Error placing order:", error);
+    logger(`Error placing order: ${error.message}`, "error");
     res.status(500).send({ msg: "Error placing order", error: error.message });
   }
 });
